@@ -81,11 +81,11 @@ def test_caching(mocker):
     registered_services = [actual_service.service]
 
     mocker.patch.object(GraphQL, 'get_all', return_value=registered_services)
-    hub = StoryscriptHub(db_path=tempfile.mkdtemp())
+    hub = StoryscriptHub(db_path=tempfile.mkdtemp(), update_interval=0.1)
     # No need to call update_cache explicitly, since the background thread will
     # call it. Just sleep for a split second.
     # hub.update_cache()
-    sleep(0.2)
+    sleep(0.1)
     assert hub.get_all_service_names() == ['sample_alias',
                                            'default_username/sample_name']
 
@@ -109,6 +109,15 @@ def test_caching(mocker):
         readme='second_readme_here')
     registered_services.append(second_service.service)
 
+    # Add a sleep over here since in real life one would use a service after
+    # it has been added to the hub and sure that doesn't all happen in less
+    # than 30 sec. The goal for update trigger from the get codepath is to
+    # really let the first update trigger complete if the service isn't in
+    # the local cached db. We don't want to really process two consecutive
+    # update requests in less than a minute. Therefore here we add a sleep so
+    # that the update request from get codepath actually gets processed.
+    # We actually reduce the update_interval from default of 60 to 0.1 sec.
+    sleep(0.1)
     actual_service = hub.get(alias='second_service')
 
     assert actual_service is not None
@@ -127,12 +136,15 @@ not_python_fixture = JsonFixtureHelper.load_fixture("not_python_fixture")
 
 
 def test_service_wrapper(mocker):
-    hub = StoryscriptHub(db_path=tempfile.mkdtemp(), service_wrapper=True)
-
-
     mocker.patch.object(GraphQL, "get_all", return_value=[not_python_fixture])
 
     mocker.patch.object(ServiceData, 'from_dict')
+
+    hub = StoryscriptHub(
+        db_path=tempfile.mkdtemp(),
+        service_wrapper=True,
+        update_interval=0.1,
+    )
 
     assert hub.get("microservice/not_python") is not None
 
@@ -142,11 +154,15 @@ def test_service_wrapper(mocker):
 
 
 def test_get_with_wrap_service(mocker):
-    hub = StoryscriptHub(db_path=tempfile.mkdtemp())
-
     mocker.patch.object(GraphQL, "get_all", return_value=[not_python_fixture])
 
     mocker.patch.object(ServiceData, 'from_dict')
+
+    hub = StoryscriptHub(
+        db_path=tempfile.mkdtemp(),
+        service_wrapper=True,
+        update_interval=0.1,
+    )
 
     assert hub.get("microservice/not_python", wrap_service=True) is not None
 

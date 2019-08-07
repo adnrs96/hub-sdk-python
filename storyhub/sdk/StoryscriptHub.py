@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import time
 from threading import Lock
 from typing import Union
 from unittest.mock import MagicMock
@@ -37,7 +38,7 @@ class StoryscriptHub:
         return os.path.join(p, app)
 
     def __init__(self, db_path: str = None, auto_update: bool = True,
-                 service_wrapper=False):
+                 service_wrapper=False, update_interval=60):
         """
         StoryscriptHub - a utility to access Storyscript's hub service data.
 
@@ -45,7 +46,11 @@ class StoryscriptHub:
         :param auto_update: Will automatically pull services from the hub
         every 30 seconds
         :param service_wrapper: Allows you to utilize safe ServiceData objects
+        :update_interval: Allows you to control time between two consecutive
+        update_cache requests being entertained. Value is in seconds.
         """
+        self.last_update_run = None
+        self.update_interval = update_interval
 
         if db_path is None:
             db_path = StoryscriptHub.get_config_dir('.storyscript')
@@ -158,32 +163,41 @@ class StoryscriptHub:
             return None
 
     def update_cache(self):
-        services = GraphQL.get_all()
-
-        # tell the service wrapper to reload any services from the cache.
-        if self._service_wrapper is not None:
-            self._service_wrapper.reload_services(services)
-
-        with Database(self.db_path) as db:
-            with db.atomic(lock_type='IMMEDIATE'):
-                Service.delete().execute()
-                for service in services:
-                    Service.create(
-                        service_uuid=service['serviceUuid'],
-                        name=service['service']['name'],
-                        alias=service['service']['alias'],
-                        username=service['service']['owner']['username'],
-                        description=service['service']['description'],
-                        certified=service['service']['isCertified'],
-                        public=service['service']['public'],
-                        topics=json.dumps(service['service']['topics']),
-                        state=service['state'],
-                        configuration=json.dumps(service['configuration']),
-                        readme=service['readme'],
-                        raw_data=json.dumps(service))
-
         with self.update_lock:
+            if self.last_update_run is not None:
+                current_time = time.time()
+                if (current_time - self.last_update_run) < \
+                        self.update_interval:
+                    # Last update should at least be 60 seconds old
+                    return False
+
+            services = GraphQL.get_all()
+
+            # tell the service wrapper to reload any services from the cache.
+            if self._service_wrapper is not None:
+                self._service_wrapper.reload_services(services)
+
+            with Database(self.db_path) as db:
+                with db.atomic(lock_type='IMMEDIATE'):
+                    Service.delete().execute()
+                    for service in services:
+                        Service.create(
+                            service_uuid=service['serviceUuid'],
+                            name=service['service']['name'],
+                            alias=service['service']['alias'],
+                            username=service['service']['owner']['username'],
+                            description=service['service']['description'],
+                            certified=service['service']['isCertified'],
+                            public=service['service']['public'],
+                            topics=json.dumps(service['service']['topics']),
+                            state=service['state'],
+                            configuration=json.dumps(service['configuration']),
+                            readme=service['readme'],
+                            raw_data=json.dumps(service))
+
             self.ttl_cache_for_service_names.clear()
             self.ttl_cache_for_services.clear()
+
+            self.last_update_run = time.time()
 
         return True
