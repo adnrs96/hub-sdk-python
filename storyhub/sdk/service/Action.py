@@ -99,3 +99,6 @@ class Action(ServiceObject):
 
     def event(self, name):
         return self._events.get(name, None)
+
+    def output(self):
+        return self._output
