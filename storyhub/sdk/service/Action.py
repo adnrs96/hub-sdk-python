@@ -92,7 +92,7 @@ class Action(ServiceObject):
         return list(self._args.values())
 
     def arg(self, name):
-        return self._events.get(name, None)
+        return self._args.get(name, None)
 
     def events(self):
         return list(self._events.values())
