@@ -102,3 +102,6 @@ class Action(ServiceObject):
 
     def output(self):
         return self._output
+
+    def required_args(self):
+        return list(filter(lambda arg: arg.required(), self._args.values()))
