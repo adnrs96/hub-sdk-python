@@ -62,3 +62,6 @@ class OutputAction(ServiceObject):
 
     def http(self):
         return self._http_options
+
+    def required_args(self):
+        return list(filter(lambda arg: arg.required(), self._args.values()))

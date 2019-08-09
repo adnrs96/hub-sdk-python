@@ -73,3 +73,6 @@ class Event(ServiceObject):
 
     def arg(self, name):
         return self._args.get(name, None)
+
+    def required_args(self):
+        return list(filter(lambda arg: arg.required(), self._args.values()))
