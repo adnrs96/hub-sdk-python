@@ -19,11 +19,61 @@ from storyhub.sdk.db.Service import Service
 from storyhub.sdk.service.ServiceData import ServiceData
 
 
+class UpdateController:
+    IDLE = 1
+    UPDATING = 2
+    UPDATED = 3
+
+    update_lock = Lock()
+
+    def __init__(self, update_interval):
+        self.last_update_run = None
+        self.update_interval = update_interval
+        self.update_status = self.IDLE
+
+    def go_nogo_execute_update(self):
+        with self.update_lock:
+            if self.check_last_update_run() and not self.is_updating():
+                self.mark_status_updating()
+                return True
+
+            sleep_count = 0
+            while self.update_status == self.UPDATING and sleep_count < 5:
+                time.sleep(0.5)
+                sleep_count += 1
+            if self.update_status == self.UPDATING:
+                # Something went wrong with the last update since it didn't
+                # finish in 2.5 secs. We will allow a new update to start.
+                return True
+            return False
+
+    def mark_status_updating(self):
+        self.update_status = self.UPDATING
+
+    def mark_status_updated(self):
+        self.update_status = self.UPDATED
+        self.last_update_run = time.time()
+
+    def is_updating(self):
+        if self.update_status in (self.IDLE, self.UPDATED):
+            return False
+        return True
+
+    def check_last_update_run(self):
+        if self.last_update_run is None:
+            return True
+        current_time = time.time()
+        if (current_time - self.last_update_run) < \
+                self.update_interval:
+            # Last update should at least be 60 seconds old
+            return False
+        return True
+
+
 class StoryscriptHub:
     update_thread = None
 
     retry_lock = Lock()
-    update_lock = Lock()
 
     ttl_cache_for_services = TTLCache(maxsize=128, ttl=1 * 60)
     ttl_cache_for_service_names = TTLCache(maxsize=1, ttl=1 * 60)
@@ -49,8 +99,7 @@ class StoryscriptHub:
         :update_interval: Allows you to control time between two consecutive
         update_cache requests being entertained. Value is in seconds.
         """
-        self.last_update_run = None
-        self.update_interval = update_interval
+        self.update_control = UpdateController(update_interval)
 
         if db_path is None:
             db_path = StoryscriptHub.get_config_dir('.storyscript')
@@ -163,41 +212,37 @@ class StoryscriptHub:
             return None
 
     def update_cache(self):
-        with self.update_lock:
-            if self.last_update_run is not None:
-                current_time = time.time()
-                if (current_time - self.last_update_run) < \
-                        self.update_interval:
-                    # Last update should at least be 60 seconds old
-                    return False
+        do_update = self.update_control.go_nogo_execute_update()
+        if not do_update:
+            return False
 
-            services = GraphQL.get_all()
+        services = GraphQL.get_all()
 
-            # tell the service wrapper to reload any services from the cache.
-            if self._service_wrapper is not None:
-                self._service_wrapper.reload_services(services)
+        # tell the service wrapper to reload any services from the cache.
+        if self._service_wrapper is not None:
+            self._service_wrapper.reload_services(services)
 
-            with Database(self.db_path) as db:
-                with db.atomic(lock_type='IMMEDIATE'):
-                    Service.delete().execute()
-                    for service in services:
-                        Service.create(
-                            service_uuid=service['serviceUuid'],
-                            name=service['service']['name'],
-                            alias=service['service']['alias'],
-                            username=service['service']['owner']['username'],
-                            description=service['service']['description'],
-                            certified=service['service']['isCertified'],
-                            public=service['service']['public'],
-                            topics=json.dumps(service['service']['topics']),
-                            state=service['state'],
-                            configuration=json.dumps(service['configuration']),
-                            readme=service['readme'],
-                            raw_data=json.dumps(service))
+        with Database(self.db_path) as db:
+            with db.atomic(lock_type='IMMEDIATE'):
+                Service.delete().execute()
+                for service in services:
+                    Service.create(
+                        service_uuid=service['serviceUuid'],
+                        name=service['service']['name'],
+                        alias=service['service']['alias'],
+                        username=service['service']['owner']['username'],
+                        description=service['service']['description'],
+                        certified=service['service']['isCertified'],
+                        public=service['service']['public'],
+                        topics=json.dumps(service['service']['topics']),
+                        state=service['state'],
+                        configuration=json.dumps(service['configuration']),
+                        readme=service['readme'],
+                        raw_data=json.dumps(service))
 
-            self.ttl_cache_for_service_names.clear()
-            self.ttl_cache_for_services.clear()
+        self.ttl_cache_for_service_names.clear()
+        self.ttl_cache_for_services.clear()
 
-            self.last_update_run = time.time()
+        self.update_control.mark_status_updated()
 
         return True
